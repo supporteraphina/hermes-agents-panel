@@ -1,6 +1,6 @@
 # Agents panel for Hermes Desktop
 
-An **Agents** box under the sessions sidebar that shows only what the sessions list does not: the helper agents and background jobs running under each chat, and chats waiting on your answer. It says "No agents running" when nothing runs.
+An **Agents** box under the sessions sidebar that shows only what the sessions list does not: the helper agents running under each chat, and chats waiting on your answer, styled like the sessions list. It says "None running" when nothing runs.
 
 Click a chat name to jump to it, ⌘ click to open it as a tab, ⇧ click to pop it into its own window. ⌘K "Jump to the next chat that needs me" works from the keyboard.
 
