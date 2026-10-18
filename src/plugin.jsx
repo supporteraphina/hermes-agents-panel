@@ -1,39 +1,19 @@
 /**
  * Agents panel for Hermes Desktop: helper agents under the sessions sidebar.
  *
- * Shows only what the sessions list cannot: the helper agents and background jobs running
- * under each chat, plus chats waiting on a question or approval. Empty when nothing runs.
+ * Shows only what the sessions list cannot: the helper agents running under each chat, plus
+ * chats waiting on a question or approval. Styled with the sidebar's own row classes.
  * Click a chat name to jump to it.
  *
- * Data: session.active_list, then subagent.list and process.list per live chat.
+ * Data: session.active_list, then subagent.list per live chat.
  */
-import { Codicon, host, PALETTE_AREA, atom, useQuery, useValue } from '@hermes/plugin-sdk'
-import { useState } from 'react'
+import { host, PALETTE_AREA, atom, useQuery, useValue } from '@hermes/plugin-sdk'
 
 const ID = 'agents-panel'
 const $none = atom(null)
 const st = name => host.state?.[name] || $none
 
-
 const ENDED = ['completed', 'failed', 'interrupted', 'cancelled', 'error']
-
-const C = {
-  text: 'var(--ui-text-primary, var(--foreground))',
-  sub: 'var(--ui-text-secondary)',
-  muted: 'var(--ui-text-tertiary)',
-  faint: 'var(--ui-text-quaternary)',
-  accent: 'var(--ui-accent)',
-  amber: 'var(--ui-amber, #f59e0b)',
-  green: 'var(--ui-green, #55a583)',
-  red: 'var(--ui-red, #e75e78)',
-  hover: 'var(--ui-row-hover-background, rgb(255 255 255 / 0.05))',
-  active: 'var(--ui-row-active-background, rgb(255 255 255 / 0.08))'
-}
-
-const S = {
-  clip: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 },
-  num: { fontVariantNumeric: 'tabular-nums', color: C.faint, fontSize: 11, flexShrink: 0 }
-}
 
 const errorText = err => (err instanceof Error ? err.message : String(err?.message ?? err))
 
@@ -53,64 +33,65 @@ function openChat(row, ev) {
   )
 }
 
-// Every live chat that has something running under it, or is waiting for you.
+// Live chats that have helper agents running under them, or are waiting on your answer.
 async function loadRoster() {
   const rows = (await host.request('session.active_list', {}))?.sessions || []
   const out = []
   await Promise.all(
     rows.map(async row => {
-      const [subs, procs] = await Promise.all([
-        host.request('subagent.list', { session_id: row.id }).catch(() => null),
-        host.request('process.list', { session_id: row.id }).catch(() => null)
-      ])
+      const subs = await host.request('subagent.list', { session_id: row.id }).catch(() => null)
       const agents = (subs?.subagents || []).filter(s => !ENDED.includes(String(s.status || '').toLowerCase()))
-      const jobs = (procs?.processes || []).filter(p => !/exited|done|killed|finished/i.test(p.status || ''))
       const needs = String(row.status || '').toLowerCase() === 'waiting'
-      if (needs || agents.length || jobs.length) out.push({ row, agents, jobs, needs })
+      if (needs || agents.length) out.push({ row, agents, needs })
     })
   )
   return out.sort((a, b) => Number(b.needs) - Number(a.needs) || (b.row.last_active || 0) - (a.row.last_active || 0))
 }
 
-function Line({ icon, color, text, right, title, mono }) {
+// Same classes as the app's own sidebar rows and section labels, so the skin styles both alike.
+const ROW = 'flex min-h-[1.625rem] min-w-0 items-center gap-1.5 rounded-md pl-2 pr-2 py-0.5'
+const LABEL = 'min-w-0 flex-1 truncate leading-[1.35] text-[0.8125rem]'
+const AGE = 'shrink-0 text-[0.6875rem] tabular-nums text-(--ui-text-quaternary)'
+
+function Header({ count }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 2px 18px', fontSize: 12, color: C.sub }} title={title}>
-      <Codicon name={icon} size="0.8rem" style={{ color: color || C.muted, flexShrink: 0 }} />
-      <span style={{ ...S.clip, flex: 1, fontFamily: mono ? 'var(--font-mono, monospace)' : undefined }}>{text}</span>
-      {right ? <span style={S.num}>{right}</span> : null}
+    <div className="flex shrink-0 items-center justify-between gap-1 pb-1 pt-1.5">
+      <span className="flex min-w-0 items-center gap-2 pl-2 text-[0.64rem] font-semibold uppercase tracking-[0.16em] text-(--theme-primary)">
+        <span aria-hidden="true" className="dither inline-block size-2 shrink-0 rounded-[1px]" />
+        <span className="min-w-0 truncate leading-none">Agents</span>
+      </span>
+      {count ? <span className={`${AGE} pr-2`}>{count}</span> : null}
     </div>
   )
 }
 
 function Group({ item, now, focused }) {
-  const [hover, setHover] = useState(false)
-  const { row, agents, jobs, needs } = item
+  const { row, agents, needs } = item
   return (
-    <div style={{ paddingBottom: 4 }}>
+    <>
       <div
+        className={`${ROW} cursor-pointer hover:bg-(--ui-row-hover-background) ${focused ? 'bg-(--ui-row-active-background)' : ''}`}
         onClick={ev => openChat(row, ev)}
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
-        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 8px', borderRadius: 6, cursor: 'pointer', background: focused ? C.active : hover ? C.hover : 'transparent' }}
         title="Open this chat"
       >
-        <span style={{ ...S.clip, flex: 1, fontSize: 11, color: C.muted }}>{row.title || row.preview || 'New chat'}</span>
-        {needs ? <span style={{ fontSize: 11, color: C.amber, flexShrink: 0 }}>needs you</span> : null}
+        <span className="grid size-3.5 shrink-0 place-items-center">
+          <span className={`size-1.5 rounded-full ${needs ? 'bg-amber-500' : 'bg-(--ui-accent)'}`} />
+        </span>
+        <span className={`${LABEL} text-(--ui-text-secondary)`}>{row.title || row.preview || 'New chat'}</span>
+        {needs ? <span className="shrink-0 text-[0.6875rem] text-amber-500">needs you</span> : null}
       </div>
       {agents.map(a => (
-        <Line
-          color={C.accent}
-          icon="hubot"
+        <div
+          className={ROW}
           key={a.subagent_id}
-          right={a.started_at ? fmtAge(now - a.started_at) : null}
-          text={a.goal || 'Helper agent'}
           title={`${a.goal || 'Helper agent'}${a.model ? `\n${a.model}` : ''}${a.last_tool ? `\nlast: ${a.last_tool}` : ''}`}
-        />
+        >
+          <span className="grid size-3.5 shrink-0 place-items-center" />
+          <span className={`${LABEL} text-(--ui-text-tertiary)`}>{`› ${a.goal || 'Helper agent'}`}</span>
+          {a.started_at ? <span className={AGE}>{fmtAge(now - a.started_at)}</span> : null}
+        </div>
       ))}
-      {jobs.map(p => (
-        <Line icon="terminal" key={p.session_id || p.pid || p.command} mono right={p.uptime != null ? fmtAge(p.uptime) : null} text={p.command} title={p.command} />
-      ))}
-    </div>
+    </>
   )
 }
 
@@ -118,16 +99,23 @@ function AgentsPanel() {
   const busyMap = useValue(st('busyBySession')) || {}
   const focused = useValue(st('focusedSessionId'))
   const anyBusy = Object.values(busyMap).some(Boolean)
-  const { data, error } = useQuery({ queryKey: [ID, 'roster'], refetchInterval: anyBusy ? 3000 : 8000, queryFn: loadRoster })
+  const { data } = useQuery({ queryKey: [ID, 'roster'], refetchInterval: anyBusy ? 3000 : 8000, queryFn: loadRoster })
   const items = Array.isArray(data) ? data : []
+  const count = items.reduce((n, i) => n + i.agents.length, 0)
   const now = Date.now() / 1000
   return (
-    <div style={{ height: '100%', minHeight: 0, overflowY: 'auto', padding: '6px 4px' }}>
-      {error ? <div style={{ padding: '4px 8px', fontSize: 12, color: C.red }}>{errorText(error)}</div> : null}
-      {!items.length && !error ? <div style={{ padding: '4px 8px', fontSize: 12, color: C.faint }}>No agents running</div> : null}
-      {items.map(i => (
-        <Group focused={i.row.id === focused} item={i} key={i.row.id} now={now} />
-      ))}
+    <div className="flex h-full min-h-0 flex-col px-2 pt-1">
+      <Header count={count} />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {items.length ? (
+          items.map(i => <Group focused={i.row.id === focused} item={i} key={i.row.id} now={now} />)
+        ) : (
+          <div className={ROW}>
+            <span className="grid size-3.5 shrink-0 place-items-center" />
+            <span className={`${LABEL} text-(--ui-text-quaternary)`}>None running</span>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
