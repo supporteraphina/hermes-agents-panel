@@ -1,24 +1,19 @@
 /**
- * Agents panel for Hermes Desktop: one list of every live chat under the sessions sidebar.
+ * Agents panel for Hermes Desktop: helper agents under the sessions sidebar.
  *
- * Each chat shows whether it needs you (a question or approval is open), is working, has just
- * finished, or is idle, with its helper agents and background jobs nested underneath.
- * Chats that need you sort first. Click a chat to jump to it; ⌘ or Ctrl click opens it as a
- * tab so it can be dragged into a split next to the others.
+ * Shows only what the sessions list cannot: the helper agents and background jobs running
+ * under each chat, plus chats waiting on a question or approval. Empty when nothing runs.
+ * Click a chat name to jump to it.
  *
- * Data: session.active_list (every live chat in the backend), subagent.list and process.list
- * per chat, host.state.busyBySession for instant working state.
+ * Data: session.active_list, then subagent.list and process.list per live chat.
  */
 import { Codicon, host, PALETTE_AREA, atom, useQuery, useValue } from '@hermes/plugin-sdk'
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 
 const ID = 'agents-panel'
 const $none = atom(null)
 const st = name => host.state?.[name] || $none
 
-// Chats that finished a turn since you last looked at them.
-const $done = atom({})
-const lastStatus = {}
 
 const ENDED = ['completed', 'failed', 'interrupted', 'cancelled', 'error']
 
@@ -50,135 +45,70 @@ function fmtAge(seconds) {
   return `${Math.floor(s / 86400)}d`
 }
 
-const shortModel = m =>
-  String(m || '')
-    .split('/')
-    .pop()
-    .replace(/^claude-/, '')
-    .replace(/-\d{8}$/, '')
-
-// needs-you > working > done > idle
-function stateOf(row, busyMap, done) {
-  const status = String(row.status || '').toLowerCase()
-  if (status === 'waiting') return 'needs'
-  if (busyMap?.[row.id] || ['working', 'streaming', 'starting', 'resuming'].includes(status)) return 'working'
-  if (done[row.id]) return 'done'
-  return 'idle'
-}
-
-const STATE = {
-  needs: { color: C.amber, label: 'Needs you', rank: 0, fill: true },
-  working: { color: C.accent, label: 'Working', rank: 1, fill: true },
-  done: { color: C.green, label: 'Done', rank: 2, fill: true },
-  idle: { color: C.faint, label: 'Idle', rank: 3, fill: false }
-}
-
-function Dot({ state }) {
-  const s = STATE[state]
-  return (
-    <span
-      style={{
-        display: 'block',
-        width: 7,
-        height: 7,
-        borderRadius: 99,
-        flexShrink: 0,
-        background: s.fill ? s.color : 'transparent',
-        border: s.fill ? 'none' : `1px solid ${s.color}`,
-        boxSizing: 'border-box',
-        boxShadow: state === 'working' || state === 'needs' ? `0 0 0 3px color-mix(in srgb, ${s.color} 22%, transparent)` : 'none'
-      }}
-      title={s.label}
-    />
-  )
-}
-
 function openChat(row, ev) {
   const key = row.session_key || row.id
   const intent = ev && (ev.metaKey || ev.ctrlKey) ? 'tab' : ev && ev.shiftKey ? 'window' : 'in-place'
-  $done.set({ ...$done.get(), [row.id]: false })
   Promise.resolve(host.openSession?.(key, { intent })).catch(err =>
     host.notify?.({ kind: 'error', message: `Could not open chat: ${errorText(err)}` })
   )
 }
 
-function useHelpers(sid, live) {
-  return useQuery({
-    queryKey: [ID, 'helpers', sid],
-    enabled: Boolean(sid),
-    refetchInterval: live ? 3000 : 15000,
-    queryFn: async () => {
+// Every live chat that has something running under it, or is waiting for you.
+async function loadRoster() {
+  const rows = (await host.request('session.active_list', {}))?.sessions || []
+  const out = []
+  await Promise.all(
+    rows.map(async row => {
       const [subs, procs] = await Promise.all([
-        host.request('subagent.list', { session_id: sid }).catch(() => null),
-        host.request('process.list', { session_id: sid }).catch(() => null)
+        host.request('subagent.list', { session_id: row.id }).catch(() => null),
+        host.request('process.list', { session_id: row.id }).catch(() => null)
       ])
       const agents = (subs?.subagents || []).filter(s => !ENDED.includes(String(s.status || '').toLowerCase()))
       const jobs = (procs?.processes || []).filter(p => !/exited|done|killed|finished/i.test(p.status || ''))
-      return { agents, jobs }
-    }
-  })
+      const needs = String(row.status || '').toLowerCase() === 'waiting'
+      if (needs || agents.length || jobs.length) out.push({ row, agents, jobs, needs })
+    })
+  )
+  return out.sort((a, b) => Number(b.needs) - Number(a.needs) || (b.row.last_active || 0) - (a.row.last_active || 0))
 }
 
-function ChatRow({ row, state, focused, now }) {
-  const [hover, setHover] = useState(false)
-  const { data } = useHelpers(row.id, state === 'working' || state === 'needs')
-  const agents = data?.agents || []
-  const jobs = data?.jobs || []
-  const title = row.title || row.preview || 'New chat'
-  const right = state === 'idle' || state === 'done' ? fmtAge(now - (row.last_active || now)) : STATE[state].label
+function Line({ icon, color, text, right, title, mono }) {
   return (
-    <div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 2px 18px', fontSize: 12, color: C.sub }} title={title}>
+      <Codicon name={icon} size="0.8rem" style={{ color: color || C.muted, flexShrink: 0 }} />
+      <span style={{ ...S.clip, flex: 1, fontFamily: mono ? 'var(--font-mono, monospace)' : undefined }}>{text}</span>
+      {right ? <span style={S.num}>{right}</span> : null}
+    </div>
+  )
+}
+
+function Group({ item, now, focused }) {
+  const [hover, setHover] = useState(false)
+  const { row, agents, jobs, needs } = item
+  return (
+    <div style={{ paddingBottom: 4 }}>
       <div
         onClick={ev => openChat(row, ev)}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '4px 8px',
-          borderRadius: 6,
-          cursor: 'pointer',
-          background: focused ? C.active : hover ? C.hover : 'transparent'
-        }}
-        title={`${title}\n${STATE[state].label}${row.model ? ` · ${row.model}` : ''}\nClick to open, ⌘ click for a new tab, ⇧ click for a window`}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 8px', borderRadius: 6, cursor: 'pointer', background: focused ? C.active : hover ? C.hover : 'transparent' }}
+        title="Open this chat"
       >
-        <Dot state={state} />
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ ...S.clip, fontSize: 12.5, color: state === 'idle' ? C.sub : C.text }}>{title}</div>
-          {state === 'working' || state === 'needs' ? (
-            <div style={{ ...S.clip, fontSize: 11, color: C.muted }}>
-              {[shortModel(row.model), agents.length ? `${agents.length} helper${agents.length > 1 ? 's' : ''}` : null, jobs.length ? `${jobs.length} job${jobs.length > 1 ? 's' : ''}` : null]
-                .filter(Boolean)
-                .join(' · ')}
-            </div>
-          ) : null}
-        </div>
-        <span style={{ ...S.num, color: state === 'needs' ? C.amber : S.num.color }}>{right}</span>
+        <span style={{ ...S.clip, flex: 1, fontSize: 11, color: C.muted }}>{row.title || row.preview || 'New chat'}</span>
+        {needs ? <span style={{ fontSize: 11, color: C.amber, flexShrink: 0 }}>needs you</span> : null}
       </div>
       {agents.map(a => (
-        <div
+        <Line
+          color={C.accent}
+          icon="hubot"
           key={a.subagent_id}
-          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 2px 22px', fontSize: 11.5, color: C.sub }}
+          right={a.started_at ? fmtAge(now - a.started_at) : null}
+          text={a.goal || 'Helper agent'}
           title={`${a.goal || 'Helper agent'}${a.model ? `\n${a.model}` : ''}${a.last_tool ? `\nlast: ${a.last_tool}` : ''}`}
-        >
-          <Codicon name="hubot" size="0.8rem" style={{ color: C.accent, flexShrink: 0 }} />
-          <span style={{ ...S.clip, flex: 1 }}>{a.goal || 'Helper agent'}</span>
-          <span style={S.num}>
-            {[a.tool_count != null ? `${a.tool_count}t` : null, a.started_at ? fmtAge(now - a.started_at) : null].filter(Boolean).join(' ')}
-          </span>
-        </div>
+        />
       ))}
       {jobs.map(p => (
-        <div
-          key={p.session_id || p.pid || p.command}
-          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 8px 2px 22px', fontSize: 11.5, color: C.muted }}
-          title={p.command}
-        >
-          <Codicon name="terminal" size="0.8rem" style={{ flexShrink: 0 }} />
-          <span style={{ ...S.clip, flex: 1, fontFamily: 'var(--font-mono, monospace)' }}>{p.command}</span>
-          {p.uptime != null ? <span style={S.num}>{fmtAge(p.uptime)}</span> : null}
-        </div>
+        <Line icon="terminal" key={p.session_id || p.pid || p.command} mono right={p.uptime != null ? fmtAge(p.uptime) : null} text={p.command} title={p.command} />
       ))}
     </div>
   )
@@ -187,78 +117,17 @@ function ChatRow({ row, state, focused, now }) {
 function AgentsPanel() {
   const busyMap = useValue(st('busyBySession')) || {}
   const focused = useValue(st('focusedSessionId'))
-  const done = useValue($done)
-  const [showIdle, setShowIdle] = useState(false)
-  const [now, setNow] = useState(Date.now() / 1000)
   const anyBusy = Object.values(busyMap).some(Boolean)
-
-  const { data, error } = useQuery({
-    queryKey: [ID, 'live'],
-    refetchInterval: anyBusy ? 2500 : 6000,
-    queryFn: async () => (await host.request('session.active_list', {}))?.sessions || []
-  })
-
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now() / 1000), 15000)
-    return () => clearInterval(t)
-  }, [])
-
-  // A chat that goes from working to idle while you look elsewhere is "Done" until you open it.
-  const rows = Array.isArray(data) ? data : []
-  useEffect(() => {
-    const next = { ...$done.get() }
-    let changed = false
-    for (const r of rows) {
-      const working = Boolean(busyMap[r.id]) || ['working', 'streaming', 'waiting'].includes(String(r.status))
-      if (lastStatus[r.id] === true && !working && r.id !== focused && !next[r.id]) {
-        next[r.id] = true
-        changed = true
-      }
-      lastStatus[r.id] = working
-    }
-    if (focused && next[focused]) {
-      next[focused] = false
-      changed = true
-    }
-    if (changed) $done.set(next)
-  }, [rows, busyMap, focused])
-
-  const items = rows
-    .map(r => ({ row: r, state: stateOf(r, busyMap, done) }))
-    .sort((a, b) => STATE[a.state].rank - STATE[b.state].rank || (b.row.last_active || 0) - (a.row.last_active || 0))
-  const active = items.filter(i => i.state !== 'idle')
-  const idle = items.filter(i => i.state === 'idle')
-  const counts = { needs: 0, working: 0, done: 0 }
-  for (const i of active) counts[i.state] += 1
-
+  const { data, error } = useQuery({ queryKey: [ID, 'roster'], refetchInterval: anyBusy ? 3000 : 8000, queryFn: loadRoster })
+  const items = Array.isArray(data) ? data : []
+  const now = Date.now() / 1000
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px 4px', fontSize: 11, color: C.muted }}>
-        {counts.needs ? <span style={{ color: C.amber }}>{counts.needs} need you</span> : null}
-        {counts.working ? <span style={{ color: C.accent }}>{counts.working} working</span> : null}
-        {counts.done ? <span style={{ color: C.green }}>{counts.done} done</span> : null}
-        {!active.length ? <span>Nothing running</span> : null}
-        <span style={{ marginLeft: 'auto' }}>{rows.length} live</span>
-      </div>
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 4px 6px' }}>
-        {error ? <div style={{ padding: '4px 8px', fontSize: 12, color: C.red }}>{errorText(error)}</div> : null}
-        {active.map(i => (
-          <ChatRow focused={i.row.id === focused} key={i.row.id} now={now} row={i.row} state={i.state} />
-        ))}
-        {idle.length ? (
-          <button
-            onClick={() => setShowIdle(!showIdle)}
-            style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'none', border: 0, padding: '6px 8px 2px', fontSize: 11, color: C.faint, cursor: 'pointer' }}
-            type="button"
-          >
-            <Codicon name={showIdle ? 'chevron-down' : 'chevron-right'} size="0.7rem" />
-            Idle {idle.length}
-          </button>
-        ) : null}
-        {showIdle
-          ? idle.map(i => <ChatRow focused={i.row.id === focused} key={i.row.id} now={now} row={i.row} state={i.state} />)
-          : null}
-      </div>
+    <div style={{ height: '100%', minHeight: 0, overflowY: 'auto', padding: '6px 4px' }}>
+      {error ? <div style={{ padding: '4px 8px', fontSize: 12, color: C.red }}>{errorText(error)}</div> : null}
+      {!items.length && !error ? <div style={{ padding: '4px 8px', fontSize: 12, color: C.faint }}>No agents running</div> : null}
+      {items.map(i => (
+        <Group focused={i.row.id === focused} item={i} key={i.row.id} now={now} />
+      ))}
     </div>
   )
 }
@@ -285,10 +154,7 @@ export default {
         run: async () => {
           try {
             const rows = (await host.request('session.active_list', {}))?.sessions || []
-            const busy = host.state?.busyBySession?.get?.() || {}
-            const done = $done.get()
-            const pick =
-              rows.find(r => String(r.status) === 'waiting') || rows.find(r => done[r.id]) || rows.find(r => busy[r.id])
+            const pick = rows.find(r => String(r.status) === 'waiting')
             if (pick) openChat(pick)
             else host.notify?.({ kind: 'info', message: 'No chat needs you right now.' })
           } catch (err) {

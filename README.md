@@ -1,13 +1,8 @@
 # Agents panel for Hermes Desktop
 
-An **Agents** list under the sessions sidebar with every live chat on the backend:
+An **Agents** box under the sessions sidebar that shows only what the sessions list does not: the helper agents and background jobs running under each chat, and chats waiting on your answer. It says "No agents running" when nothing runs.
 
-- **Needs you** (amber): a question or approval is waiting
-- **Working** (accent): the chat is running, with its helper agents and background jobs listed under it
-- **Done** (green): finished a turn since you last opened it
-- **Idle**: folded away at the bottom
-
-Chats that need you sort first. Click a chat to jump to it, ⌘ click to open it as a tab (then drag it into a split), ⇧ click to pop it into its own window. ⌘K "Jump to the next chat that needs me" does the same from the keyboard.
+Click a chat name to jump to it, ⌘ click to open it as a tab, ⇧ click to pop it into its own window. ⌘K "Jump to the next chat that needs me" works from the keyboard.
 
 ## Install
 
