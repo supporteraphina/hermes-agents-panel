@@ -1,0 +1,13 @@
+{
+  "name": "hermes-agents-panel",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Hermes Desktop plugin: Agents list under the sessions sidebar: every live chat, its state and its helper agents.",
+  "scripts": {
+    "build": "esbuild src/plugin.jsx --bundle --format=esm --platform=browser --target=chrome120 --jsx=automatic --jsx-import-source=react --external:@hermes/plugin-sdk --external:react --external:react/jsx-runtime --minify --legal-comments=none --banner:js=\"/* Agents panel for Hermes Desktop. Source: src/ in this repo. */\" --outfile=agents-panel/plugin.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
+  }
+}
